@@ -49,7 +49,10 @@ jobs:
 
       - run: npm ci
 
-      # Unsigned: signing and notarisation need secrets, so they belong in a release
-      # workflow rather than on every push. This only proves the bundle still builds.
-      - name: Build app bundle
-        run: npm run build
+      - name: Compile release binary
+        # --no-bundle deliberately. A full `tauri build` exits 1 when
+        # createUpdaterArtifacts is enabled and TAURI_SIGNING_PRIVATE_KEY is absent,
+        # and that key should be exposed only to the release workflow, not to every
+        # push. Compiling is what this job is for; bundling, signing and notarising
+        # belong to release.yml, which has the secrets.
+        run: npx tauri build --no-bundle

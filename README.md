@@ -82,6 +82,35 @@ Regenerate icons after editing `tools/gen_icons.py`:
 python3 tools/gen_icons.py
 ```
 
+## Releasing
+
+Release builds are universal (Apple Silicon + Intel), which needs `rustup` with both
+targets — a Homebrew `rust` only ships the host target and cannot cross-compile:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+```
+
+Tagging triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which
+builds, signs, notarises and opens a **draft** release so artifacts can be checked
+before anyone can download them:
+
+```bash
+git tag v0.1.0 && git push --tags
+```
+
+Required secrets: `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+for the update manifest, plus `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` for signing
+and notarisation. Without the Apple ones the build still succeeds but produces an
+ad-hoc signed app that Gatekeeper refuses on other Macs — so don't publish a draft
+built without them.
+
+> **Back up the updater private key.** It lives outside this repo at
+> `~/.tauri/no-afk-updater.key`. Lose it and existing installations can never be
+> updated again — every user would have to reinstall by hand. It is the only artifact
+> here with no recovery path.
+
 ## Design notes
 
 **Leaked assertions, narrowly.** A crash is safe: powerd releases a dead process's

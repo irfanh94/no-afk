@@ -25,6 +25,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager as _, State, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::UpdaterExt;
 
 const TRAY_ID: &str = "main";
 const SETTINGS_WINDOW: &str = "settings";
@@ -63,6 +64,12 @@ struct AppState {
     menu: Mutex<Option<MenuHandles>>,
     /// Last icon we pushed, so the tick doesn't re-set it 60 times a minute.
     icon_active: Mutex<Option<bool>>,
+    /// Version string of a newer release, once a check has found one.
+    ///
+    /// Populated by a background check at startup. Without that, the only way a user
+    /// would ever learn about an update is by opening Settings and pressing a button,
+    /// which almost nobody does.
+    available_update: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -265,6 +272,58 @@ fn app_version(app: AppHandle) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+/// Ask the update endpoint whether a newer version exists.
+///
+/// `Ok(None)` means up to date. An `Err` is expected and normal before the first
+/// release exists, since the manifest 404s until then.
+async fn look_for_update(app: &AppHandle) -> Result<Option<String>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(Some(update.version.clone())),
+        Ok(None) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<String>, String> {
+    let found = look_for_update(&app).await?;
+    *app.state::<Arc<AppState>>()
+        .available_update
+        .lock()
+        .unwrap() = found.clone();
+    Ok(found)
+}
+
+/// What a background check already found, without hitting the network again.
+#[tauri::command]
+fn pending_update(state: State<'_, Arc<AppState>>) -> Option<String> {
+    state.available_update.lock().unwrap().clone()
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Err("no update available".into());
+    };
+
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Release the session before the process is replaced, so the new build starts
+    // from a clean slate rather than inheriting a stale tray state.
+    let _ = app.state::<Arc<AppState>>().awake.lock().unwrap().stop();
+
+    app.restart()
+}
+
+// ---------------------------------------------------------------------------
 // Tray
 // ---------------------------------------------------------------------------
 
@@ -341,7 +400,7 @@ fn open_settings(app: &AppHandle) {
     )
     .title("no-afk")
     // Tall enough that every section fits without scrolling on a default display.
-    .inner_size(540.0, 790.0)
+    .inner_size(540.0, 850.0)
     .min_inner_size(480.0, 520.0)
     .resizable(true)
     .build();
@@ -461,6 +520,7 @@ fn main() {
         settings: Mutex::new(Settings::default()),
         menu: Mutex::new(None),
         icon_active: Mutex::new(None),
+        available_update: Mutex::new(None),
     });
 
     tauri::Builder::default()
@@ -469,6 +529,7 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state.clone())
         .invoke_handler(tauri::generate_handler![
             get_settings,
@@ -482,6 +543,9 @@ fn main() {
             set_autostart,
             open_donate,
             app_version,
+            check_for_update,
+            pending_update,
+            install_update,
         ])
         .setup(move |app| {
             // Menu-bar-only: no Dock icon. Matches LSUIElement in Info.plist, but also
@@ -510,6 +574,22 @@ fn main() {
             if std::env::args().any(|a| a == "--settings") {
                 open_settings(&handle);
             }
+
+            // Look for an update once, in the background. Failures are silent: before
+            // the first release the manifest 404s, and a user who never opens Settings
+            // should not be shown network errors from a tray app.
+            let update_handle = handle.clone();
+            let update_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                match look_for_update(&update_handle).await {
+                    Ok(Some(version)) => {
+                        println!("no-afk: update available: {version}");
+                        *update_state.available_update.lock().unwrap() = Some(version);
+                    }
+                    Ok(None) => {}
+                    Err(err) => eprintln!("no-afk: update check failed: {err}"),
+                }
+            });
 
             // Drive countdown + auto-expiry.
             let tick_handle = handle.clone();

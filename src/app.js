@@ -106,6 +106,51 @@ el("autostart").addEventListener("change", async (e) => {
 
 el("donate").addEventListener("click", () => invoke("open_donate"));
 
+// --- updates ---------------------------------------------------------------
+
+const DEFAULT_ABOUT = "Keeps your Mac awake using IOKit power assertions.";
+
+/** Offer the install, once a version is known to be available. */
+function offerUpdate(version) {
+  el("update-status").textContent = `Version ${version} is available.`;
+  const btn = el("update");
+  btn.textContent = `Install ${version}`;
+  btn.classList.add("primary");
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = "Installing…";
+    try {
+      // Succeeds by relaunching, so nothing after this runs on the happy path.
+      await invoke("install_update");
+    } catch (err) {
+      el("update-status").textContent = `Install failed: ${err}`;
+      btn.disabled = false;
+      btn.textContent = `Install ${version}`;
+    }
+  };
+}
+
+async function checkForUpdate() {
+  const btn = el("update");
+  btn.disabled = true;
+  el("update-status").textContent = "Checking…";
+  try {
+    const version = await invoke("check_for_update");
+    if (version) {
+      offerUpdate(version);
+    } else {
+      el("update-status").textContent = "no-afk is up to date.";
+    }
+  } catch (err) {
+    // Expected before the first release exists: the manifest 404s until then.
+    el("update-status").textContent = `Could not check for updates: ${err}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+el("update").addEventListener("click", checkForUpdate);
+
 // --- assertions -----------------------------------------------------------
 
 function assertionRow(a) {
@@ -158,7 +203,13 @@ async function refreshAssertions() {
     );
     return;
   }
+
+  // Rebuilding the rows resets scroll position; restore whatever the user had so a
+  // periodic refresh doesn't yank the list out from under them (and stays at the top
+  // when they haven't scrolled at all).
+  const scroll = host.scrollTop;
   host.replaceChildren(...list.map(assertionRow));
+  host.scrollTop = scroll;
 }
 
 el("refresh").addEventListener("click", refreshAssertions);
@@ -185,6 +236,12 @@ async function init() {
 
   el("autostart").checked = await invoke("get_autostart");
   el("version").textContent = await invoke("app_version");
+  el("update-status").textContent = DEFAULT_ABOUT;
+
+  // Surface whatever the startup background check already found, without spending
+  // another network round trip on opening the window.
+  const already = await invoke("pending_update");
+  if (already) offerUpdate(already);
 
   await Promise.all([refreshStatus(), refreshAssertions()]);
   setInterval(refreshStatus, STATUS_MS);

@@ -254,6 +254,10 @@ select {
   border-radius: 8px;
   max-height: 220px;
   overflow-y: auto;
+  /* The list is rebuilt every few seconds. Scroll anchoring reacts to that by
+     shifting scrollTop to "keep" content stable, which drifts the view down and
+     hides the top-ranked rows. app.js preserves scrollTop explicitly instead. */
+  overflow-anchor: none;
 }
 
 .assertion {

@@ -1,0 +1,68 @@
+name: Release
+
+# Tag-driven: `git tag v0.1.0 && git push --tags`.
+#
+# Produces a *draft* release so the artifacts can be checked before anyone can
+# download them. Publishing the draft is a manual step.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust with both macOS targets
+        # Both are needed for universal-apple-darwin: tauri builds each and runs
+        # lipo. A local Homebrew rust cannot do this, which is why release builds
+        # belong in CI.
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-universal
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # Signs the update manifest so clients only accept releases from us.
+          # Keypair is separate from Apple's; the public half lives in
+          # tauri.conf.json under plugins.updater.pubkey.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+          # Apple code signing + notarisation. Until these secrets exist the build
+          # still succeeds, but produces an ad-hoc signed app that Gatekeeper will
+          # refuse on other Macs — so do not publish a draft built without them.
+          #
+          # APPLE_SIGNING_IDENTITY must name YOUR Developer ID, e.g.
+          #   "Developer ID Application: Irfan Hodzic (TEAMID)"
+          # It has to be named explicitly because tauri signs nothing by default — it
+          # does not go hunting for an identity in the keychain. That is also why a
+          # local `tauri build` comes out ad-hoc signed rather than accidentally
+          # signed by some other team's certificate.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: --target universal-apple-darwin
+          tagName: ${{ github.ref_name }}
+          releaseName: no-afk ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          # Emits latest.json, which plugins.updater.endpoints points at.
+          includeUpdaterJson: true

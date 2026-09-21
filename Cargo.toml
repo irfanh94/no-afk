@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/awake-core", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Irfan Hodzic"]
+repository = "https://github.com/irfanh94/no-afk"
+
+[workspace.dependencies]
+awake-core = { path = "crates/awake-core" }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

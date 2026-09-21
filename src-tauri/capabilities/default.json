@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Tray-only app: no frontend IPC surface yet.",
+  "windows": ["*"],
+  "permissions": ["core:default"]
+}

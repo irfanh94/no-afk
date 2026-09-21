@@ -1,0 +1,14 @@
+{
+  "name": "no-afk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keep your Mac awake.",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "python3 tools/gen_icons.py"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

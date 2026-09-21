@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Menu-bar-only app: no Dock icon, no app switcher entry. The Apple-blessed
+         way to do this; we also set ActivationPolicy::Accessory at runtime so `tauri
+         dev` behaves the same as a bundled build. -->
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>

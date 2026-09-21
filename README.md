@@ -37,12 +37,22 @@ crates/awake-core/     platform-agnostic keep-awake primitives — no UI, no Tau
   src/linux.rs         logind / Wayland / ScreenSaver  (stub + implementation notes)
   src/fake.rs          in-memory backend for tests
   src/session.rs       durations, countdown, auto-end
-src-tauri/             menu bar shell (tray, menu, tick)
+src-tauri/             menu bar shell
+  src/main.rs          tray, menu, commands, tick
+  src/settings.rs      persisted settings (JSON in the OS config dir)
+src/                   settings window (plain HTML/CSS/JS, no bundler)
 tools/gen_icons.py     regenerates all icons from code
 ```
 
 The split is deliberate: `awake-core` has no dependency on Tauri or any UI, so the
 Windows and Linux ports are a backend file each rather than a rewrite.
+
+## Why is my Mac awake?
+
+The settings window lists **every** power assertion held on the system, by any
+process, with ours highlighted — so "why won't my Mac sleep?" has an answer in the app
+instead of needing `pmset -g assertions` in a terminal. In practice the culprit is
+usually Chrome, Zoom or an Electron app rather than a keep-awake utility.
 
 ## Build
 

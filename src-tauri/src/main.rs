@@ -4,28 +4,39 @@
 //! no-afk — menu bar shell.
 //!
 //! Deliberately thin. All keep-awake logic lives in `awake-core` so it can be tested
-//! without a UI and reused on Windows/Linux. This file owns the tray,
-//! the menu, and the once-a-second tick.
+//! without a UI and reused on Windows/Linux. This file owns the tray, the menu, the
+//! settings window and the once-a-second tick.
 
+mod settings;
+
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use awake_core::session::{Kind, Manager as AwakeManager, SystemClock};
-use awake_core::{default_backend, Flags};
+use awake_core::{default_backend, Backend, Flags};
+use serde::Serialize;
+use settings::Settings;
 use tauri::image::Image;
-use tauri::menu::{
-    CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder,
-    PredefinedMenuItem, SubmenuBuilder,
-};
+use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager as _, Wry};
+use tauri::{AppHandle, Manager as _, State, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
 
 const TRAY_ID: &str = "main";
+const SETTINGS_WINDOW: &str = "settings";
 const DONATE_URL: &str = "https://ko-fi.com/irfanhodzic";
 
-/// Durations offered in the menu. `None` = indefinite.
+/// Set only by the Quit menu item.
+///
+/// A tray app must survive its last window closing, so `ExitRequested` is normally
+/// vetoed. But vetoing it unconditionally would make the app unquittable, so real
+/// quits are distinguished by this flag.
+static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Durations offered in the tray submenu and the settings dropdown. `None` =
+/// indefinite.
 const PRESETS: &[(&str, Option<u64>)] = &[
     ("Indefinitely", None),
     ("For 15 minutes", Some(15 * 60)),
@@ -39,14 +50,14 @@ const PRESETS: &[(&str, Option<u64>)] = &[
 struct MenuHandles {
     status: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
-    keep_display: CheckMenuItem<Wry>,
-    autostart: CheckMenuItem<Wry>,
 }
 
 struct AppState {
+    /// Kept alongside the manager so commands can query system-wide assertions
+    /// without reaching through it.
+    backend: Arc<dyn Backend>,
     awake: Mutex<AwakeManager>,
-    /// Whether to hold the display assertion as well as the system one.
-    keep_display: Mutex<bool>,
+    settings: Mutex<Settings>,
     menu: Mutex<Option<MenuHandles>>,
     /// Last icon we pushed, so the tick doesn't re-set it 60 times a minute.
     icon_active: Mutex<Option<bool>>,
@@ -54,13 +65,196 @@ struct AppState {
 
 impl AppState {
     fn flags(&self) -> Flags {
-        if *self.keep_display.lock().unwrap() {
+        if self.settings.lock().unwrap().keep_display {
             Flags::display_and_system()
         } else {
             Flags::system_only()
         }
     }
+
+    fn default_kind(&self) -> Kind {
+        match self.settings.lock().unwrap().default_duration_secs {
+            Some(secs) => Kind::For(Duration::from_secs(secs)),
+            None => Kind::Indefinite,
+        }
+    }
 }
+
+// ---------------------------------------------------------------------------
+// DTOs
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct StatusDto {
+    active: bool,
+    /// `None` when inactive *or* indefinite; pair with `indefinite` to tell them apart.
+    remaining_secs: Option<u64>,
+    indefinite: bool,
+    keep_display: bool,
+}
+
+#[derive(Serialize)]
+struct AssertionDto {
+    pid: i32,
+    process: String,
+    kind: String,
+    name: String,
+    /// Whether this is one of ours, so the UI can highlight it.
+    ours: bool,
+}
+
+#[derive(Serialize)]
+struct PresetDto {
+    label: String,
+    secs: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn get_settings(state: State<'_, Arc<AppState>>) -> Settings {
+    state.settings.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_settings(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    new: Settings,
+) -> Result<(), String> {
+    *state.settings.lock().unwrap() = new.clone();
+    new.save(&app)?;
+
+    // Re-acquire so a flag change takes effect on the *current* session rather than
+    // silently waiting for the next one.
+    let flags = state.flags();
+    let mut awake = state.awake.lock().unwrap();
+    if let Some(session) = awake.session().cloned() {
+        awake
+            .start(session.kind, flags, session.reason)
+            .map_err(|e| e.to_string())?;
+    }
+    drop(awake);
+
+    refresh(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_status(state: State<'_, Arc<AppState>>) -> StatusDto {
+    let awake = state.awake.lock().unwrap();
+    let active = awake.is_active();
+    let indefinite = matches!(awake.session().map(|s| s.kind), Some(Kind::Indefinite));
+
+    StatusDto {
+        active,
+        remaining_secs: awake.remaining().map(|d| d.as_secs()),
+        indefinite,
+        keep_display: state.settings.lock().unwrap().keep_display,
+    }
+}
+
+#[tauri::command]
+fn start_session(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    secs: Option<u64>,
+) -> Result<(), String> {
+    let kind = match secs {
+        Some(s) => Kind::For(Duration::from_secs(s)),
+        None => Kind::Indefinite,
+    };
+    let flags = state.flags();
+    state
+        .awake
+        .lock()
+        .unwrap()
+        .start(kind, flags, "settings window")
+        .map_err(|e| e.to_string())?;
+
+    refresh(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.awake.lock().unwrap().stop().map_err(|e| e.to_string())?;
+    refresh(&app, &state);
+    Ok(())
+}
+
+/// Every assertion held on the system, by any process — the "why is my Mac awake?"
+/// panel. Sorted so display-blocking ones come first, since those are what people
+/// are usually hunting for.
+#[tauri::command]
+fn list_assertions(state: State<'_, Arc<AppState>>) -> Result<Vec<AssertionDto>, String> {
+    let me = std::process::id() as i32;
+    let mut list: Vec<AssertionDto> = state
+        .backend
+        .system_assertions()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|a| AssertionDto {
+            ours: a.pid == me,
+            pid: a.pid,
+            process: a.process,
+            kind: a.kind,
+            name: a.name,
+        })
+        .collect();
+
+    list.sort_by(|a, b| {
+        let rank = |d: &AssertionDto| match () {
+            _ if d.ours => 0,
+            _ if d.kind.contains("Display") => 1,
+            _ if d.kind.contains("Idle") || d.kind.contains("System") => 2,
+            _ => 3,
+        };
+        rank(a).cmp(&rank(b)).then_with(|| a.process.cmp(&b.process))
+    });
+    Ok(list)
+}
+
+#[tauri::command]
+fn presets() -> Vec<PresetDto> {
+    PRESETS
+        .iter()
+        .map(|(label, secs)| PresetDto { label: (*label).to_string(), secs: *secs })
+        .collect()
+}
+
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mgr = app.autolaunch();
+    if enabled {
+        mgr.enable().map_err(|e| e.to_string())
+    } else {
+        mgr.disable().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn open_donate(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(DONATE_URL, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Tray
+// ---------------------------------------------------------------------------
 
 fn tray_icon(active: bool) -> tauri::Result<Image<'static>> {
     let bytes: &[u8] = if active {
@@ -117,11 +311,82 @@ fn refresh(app: &AppHandle, state: &AppState) {
     }
 }
 
+fn open_settings(app: &AppHandle) {
+    // Reuse the existing window rather than stacking duplicates.
+    if let Some(win) = app.get_webview_window(SETTINGS_WINDOW) {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        return;
+    }
+
+    let built = tauri::WebviewWindowBuilder::new(
+        app,
+        SETTINGS_WINDOW,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("no-afk")
+    // Tall enough that every section fits without scrolling on a default display.
+    .inner_size(540.0, 790.0)
+    .min_inner_size(480.0, 520.0)
+    .resizable(true)
+    .build();
+
+    match built {
+        Ok(win) => {
+            let _ = win.set_focus();
+        }
+        Err(err) => eprintln!("no-afk: could not open settings: {err}"),
+    }
+}
+
+fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
+    let status = MenuItemBuilder::with_id("status", "Asleep as usual")
+        .enabled(false)
+        .build(app)?;
+    let toggle = MenuItemBuilder::with_id("toggle", "Turn On").build(app)?;
+
+    let mut presets = SubmenuBuilder::new(app, "Stay awake…");
+    for (label, secs) in PRESETS {
+        let id = match secs {
+            None => "start:inf".to_string(),
+            Some(s) => format!("start:{s}"),
+        };
+        presets = presets.item(&MenuItemBuilder::with_id(id, *label).build(app)?);
+    }
+    let presets = presets.build()?;
+
+    let settings_item = MenuItemBuilder::with_id("settings", "Settings…")
+        .accelerator("CmdOrCtrl+,")
+        .build(app)?;
+    let donate = MenuItemBuilder::with_id("donate", "Buy me a coffee").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "Quit no-afk")
+        .accelerator("CmdOrCtrl+Q")
+        .build(app)?;
+
+    let menu = MenuBuilder::new(app)
+        .items(&[
+            &status,
+            &PredefinedMenuItem::separator(app)?,
+            &toggle,
+            &presets,
+            &PredefinedMenuItem::separator(app)?,
+            &settings_item,
+            &donate,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ])
+        .build()?;
+
+    Ok((menu, MenuHandles { status, toggle }))
+}
+
 fn handle_menu_event(app: &AppHandle, id: &str) {
     let state = app.state::<Arc<AppState>>();
 
     match id {
         "quit" => {
+            QUIT_REQUESTED.store(true, Ordering::SeqCst);
             // Release explicitly. Tauri may exit the process without unwinding, and a
             // leaked assertion outlives us — the user's Mac would simply never sleep
             // again with no UI left to fix it.
@@ -129,60 +394,29 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             app.exit(0);
         }
 
+        "settings" => open_settings(app),
+
+        "donate" => {
+            if let Err(err) = app.opener().open_url(DONATE_URL, None::<&str>) {
+                eprintln!("no-afk: could not open {DONATE_URL}: {err}");
+            }
+        }
+
         "toggle" => {
+            let flags = state.flags();
+            let kind = state.default_kind();
             let mut awake = state.awake.lock().unwrap();
+
             let result = if awake.is_active() {
                 awake.stop()
             } else {
-                awake.start(Kind::Indefinite, state.flags(), "menu toggle")
+                awake.start(kind, flags, "menu toggle")
             };
             if let Err(err) = result {
                 eprintln!("no-afk: toggle failed: {err}");
             }
             drop(awake);
             refresh(app, &state);
-        }
-
-        "keep_display" => {
-            let mut keep = state.keep_display.lock().unwrap();
-            *keep = !*keep;
-            let now = *keep;
-            drop(keep);
-
-            if let Some(handles) = state.menu.lock().unwrap().as_ref() {
-                let _ = handles.keep_display.set_checked(now);
-            }
-
-            // Re-acquire with the new flags so the change takes effect immediately
-            // rather than at the next session.
-            let mut awake = state.awake.lock().unwrap();
-            if let Some(session) = awake.session().cloned() {
-                if let Err(err) = awake.start(session.kind, state.flags(), session.reason) {
-                    eprintln!("no-afk: could not re-apply display setting: {err}");
-                }
-            }
-            drop(awake);
-            refresh(app, &state);
-        }
-
-        "donate" => {
-            // Via the opener plugin rather than `open(1)` so this works unchanged on
-            // Windows and Linux.
-            if let Err(err) = app.opener().open_url(DONATE_URL, None::<&str>) {
-                eprintln!("no-afk: could not open {DONATE_URL}: {err}");
-            }
-        }
-
-        "autostart" => {
-            let mgr = app.autolaunch();
-            let enabled = mgr.is_enabled().unwrap_or(false);
-            let result = if enabled { mgr.disable() } else { mgr.enable() };
-            if let Err(err) = result {
-                eprintln!("no-afk: autostart toggle failed: {err}");
-            }
-            if let Some(handles) = state.menu.lock().unwrap().as_ref() {
-                let _ = handles.autostart.set_checked(mgr.is_enabled().unwrap_or(false));
-            }
         }
 
         other => {
@@ -195,11 +429,10 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                         Err(_) => return,
                     },
                 };
-                let mut awake = state.awake.lock().unwrap();
-                if let Err(err) = awake.start(kind, state.flags(), "menu") {
+                let flags = state.flags();
+                if let Err(err) = state.awake.lock().unwrap().start(kind, flags, "menu") {
                     eprintln!("no-afk: start failed: {err}");
                 }
-                drop(awake);
                 refresh(app, &state);
             }
         }
@@ -207,80 +440,43 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 }
 
 fn main() {
+    let backend = default_backend();
     let state = Arc::new(AppState {
-        awake: Mutex::new(AwakeManager::new(default_backend(), Arc::new(SystemClock))),
-        keep_display: Mutex::new(true),
+        backend: Arc::clone(&backend),
+        awake: Mutex::new(AwakeManager::new(backend, Arc::new(SystemClock))),
+        settings: Mutex::new(Settings::default()),
         menu: Mutex::new(None),
         icon_active: Mutex::new(None),
     });
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            None,
-        ))
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_opener::init())
         .manage(state.clone())
+        .invoke_handler(tauri::generate_handler![
+            get_settings,
+            set_settings,
+            get_status,
+            start_session,
+            stop_session,
+            list_assertions,
+            presets,
+            get_autostart,
+            set_autostart,
+            open_donate,
+            app_version,
+        ])
         .setup(move |app| {
             // Menu-bar-only: no Dock icon. Matches LSUIElement in Info.plist, but also
             // applies under `tauri dev`, where the bundle plist isn't used.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let handle = app.handle();
+            let handle = app.handle().clone();
+            *state.settings.lock().unwrap() = Settings::load(&handle);
 
-            let status = MenuItemBuilder::with_id("status", "Asleep as usual")
-                .enabled(false)
-                .build(app)?;
-            let toggle = MenuItemBuilder::with_id("toggle", "Turn On").build(app)?;
-
-            let mut presets = SubmenuBuilder::new(app, "Stay awake…");
-            for (label, secs) in PRESETS {
-                let id = match secs {
-                    None => "start:inf".to_string(),
-                    Some(s) => format!("start:{s}"),
-                };
-                presets = presets.item(&MenuItemBuilder::with_id(id, *label).build(app)?);
-            }
-            let presets = presets.build()?;
-
-            let keep_display = CheckMenuItemBuilder::with_id("keep_display", "Keep display on")
-                .checked(true)
-                .build(app)?;
-
-            let autostart_on = handle.autolaunch().is_enabled().unwrap_or(false);
-            let autostart = CheckMenuItemBuilder::with_id("autostart", "Launch at login")
-                .checked(autostart_on)
-                .build(app)?;
-
-            let donate = MenuItemBuilder::with_id("donate", "Buy me a coffee").build(app)?;
-
-            let quit = MenuItemBuilder::with_id("quit", "Quit no-afk")
-                .accelerator("CmdOrCtrl+Q")
-                .build(app)?;
-
-            let menu = MenuBuilder::new(app)
-                .items(&[
-                    &status,
-                    &PredefinedMenuItem::separator(app)?,
-                    &toggle,
-                    &presets,
-                    &PredefinedMenuItem::separator(app)?,
-                    &keep_display,
-                    &autostart,
-                    &PredefinedMenuItem::separator(app)?,
-                    &donate,
-                    &PredefinedMenuItem::separator(app)?,
-                    &quit,
-                ])
-                .build()?;
-
-            *state.menu.lock().unwrap() = Some(MenuHandles {
-                status,
-                toggle,
-                keep_display,
-                autostart,
-            });
+            let (menu, handles) = build_menu(&handle)?;
+            *state.menu.lock().unwrap() = Some(handles);
 
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(tray_icon(false)?)
@@ -290,8 +486,14 @@ fn main() {
                 .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
                 .build(app)?;
 
+            // A tray app has no Dock icon to click, so give the settings window a
+            // launch route: `open -a no-afk --args --settings`.
+            if std::env::args().any(|a| a == "--settings") {
+                open_settings(&handle);
+            }
+
             // Drive countdown + auto-expiry.
-            let app_handle = handle.clone();
+            let tick_handle = handle.clone();
             let tick_state = state.clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(1));
@@ -301,7 +503,7 @@ fn main() {
                     awake.tick().unwrap_or(false)
                 };
 
-                refresh(&app_handle, &tick_state);
+                refresh(&tick_handle, &tick_state);
 
                 if ended {
                     println!("no-afk: session ended");
@@ -312,11 +514,19 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("failed to start no-afk")
-        .run(|app, event| {
-            // Belt-and-braces: release on any exit path, not just the Quit item.
-            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+        .run(|app, event| match event {
+            // Closing the settings window must not quit a tray app — but a real Quit
+            // must still get through.
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if !QUIT_REQUESTED.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
+            }
+
+            tauri::RunEvent::Exit => {
                 let state = app.state::<Arc<AppState>>();
                 let _ = state.awake.lock().unwrap().stop();
             }
+            _ => {}
         });
 }

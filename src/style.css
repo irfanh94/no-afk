@@ -1,0 +1,314 @@
+/* Native-feeling macOS settings styling. System colours and fonts throughout, so
+   light/dark and accent-colour changes are handled by the OS rather than hardcoded. */
+
+:root {
+  --bg: #ffffff;
+  --bg-sunken: #f5f5f7;
+  --border: rgba(0, 0, 0, 0.12);
+  --text: #1d1d1f;
+  --text-dim: #6e6e73;
+  --accent: #0a84ff;
+  --ours: rgba(10, 132, 255, 0.1);
+  --awake: #30d158;
+  --asleep: #8e8e93;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --bg-sunken: #2a2a2c;
+    --border: rgba(255, 255, 255, 0.14);
+    --text: #f5f5f7;
+    --text-dim: #98989d;
+    --ours: rgba(10, 132, 255, 0.18);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The window itself never scrolls; only <main> does. A scrolling <body> with a
+   sticky header lets content slide underneath it and can load already scrolled. */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* --- status header ------------------------------------------------------- */
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--asleep);
+  flex: none;
+  transition: background 0.2s;
+}
+
+.status.awake .dot {
+  background: var(--awake);
+  box-shadow: 0 0 0 4px rgba(48, 209, 88, 0.2);
+}
+
+.status-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.status-text strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.status-text span {
+  color: var(--text-dim);
+  font-size: 12px;
+  /* Tabular digits stop the countdown jittering as it ticks. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- layout ------------------------------------------------------------- */
+
+main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 20px 24px;
+}
+
+section {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+section:last-child {
+  border-bottom: none;
+}
+
+h2 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin: 0 0 12px;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.hint {
+  margin: -4px 0 12px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.row label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row label small {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* --- controls ----------------------------------------------------------- */
+
+button {
+  font: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  background: var(--bg);
+  color: var(--text);
+  flex: none;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-sunken);
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 500;
+  min-width: 84px;
+}
+
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+
+button.link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  font-size: 12px;
+}
+
+button.link:hover {
+  background: none;
+  text-decoration: underline;
+}
+
+select {
+  font: inherit;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  flex: none;
+}
+
+/* Checkbox styled as a macOS-ish switch. */
+.switch {
+  appearance: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--asleep);
+  position: relative;
+  flex: none;
+  margin: 0;
+  transition: background 0.18s;
+}
+
+.switch:checked {
+  background: var(--awake);
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.18s;
+}
+
+.switch:checked::after {
+  transform: translateX(16px);
+}
+
+/* --- assertions list ---------------------------------------------------- */
+
+/* Bounded with its own scroll. The number of assertions is unbounded and varies
+   minute to minute — 16 is normal — so letting the list size the page would push
+   About and the donate button arbitrarily far down. Same pattern as Login Items in
+   System Settings. */
+.assertions {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.assertion {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.assertion:last-child {
+  border-bottom: none;
+}
+
+.assertion.ours {
+  background: var(--ours);
+}
+
+.assertion-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assertion .proc {
+  font-weight: 600;
+}
+
+.assertion .kind {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.assertion .detail {
+  color: var(--text-dim);
+  font-size: 11px;
+  /* Assertion names can be very long; keep rows one line each. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.empty,
+.error {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--text-dim);
+  text-align: center;
+  font-size: 12px;
+}
+
+.error {
+  color: #ff453a;
+}

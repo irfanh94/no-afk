@@ -2,10 +2,78 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>no-afk</title>
+    <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <!-- Placeholder. no-afk is a tray-only app; this exists because Tauri requires a
-         frontendDist. The preferences window lands in Phase 2 (PLAN.md §6). -->
+    <header class="status" id="status">
+      <span class="dot" id="status-dot" aria-hidden="true"></span>
+      <div class="status-text">
+        <strong id="status-title">Loading…</strong>
+        <span id="status-sub"></span>
+      </div>
+      <button id="toggle" class="primary" type="button" disabled>…</button>
+    </header>
+
+    <main>
+      <section>
+        <h2>Session</h2>
+
+        <div class="row">
+          <label for="default-duration">
+            Default duration
+            <small>What “Turn On” in the menu bar starts.</small>
+          </label>
+          <select id="default-duration"></select>
+        </div>
+
+        <div class="row">
+          <label for="keep-display">
+            Keep display on
+            <small>
+              Stops the screen blanking and locking. Turn this off to keep the Mac
+              running with the screen dark.
+            </small>
+          </label>
+          <input type="checkbox" id="keep-display" class="switch" />
+        </div>
+
+        <div class="row">
+          <label for="autostart">
+            Launch at login
+            <small>Start no-afk automatically when you log in.</small>
+          </label>
+          <input type="checkbox" id="autostart" class="switch" />
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Why is my Mac awake?</h2>
+          <button id="refresh" class="link" type="button">Refresh</button>
+        </div>
+        <p class="hint">
+          Everything currently stopping this Mac from sleeping, including other apps.
+          Ours are highlighted.
+        </p>
+        <div id="assertions" class="assertions">
+          <p class="empty">Loading…</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>About</h2>
+        <div class="row">
+          <label>
+            no-afk <span id="version">…</span>
+            <small>Keeps your Mac awake using IOKit power assertions.</small>
+          </label>
+          <button id="donate" class="secondary" type="button">Buy me a coffee</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
   </body>
 </html>

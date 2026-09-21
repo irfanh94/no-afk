@@ -9,6 +9,7 @@
 //! We never shell out to `/usr/bin/caffeinate`: it is a subprocess to babysit, it is
 //! blocked under App Sandbox, and it is a thin wrapper over exactly these calls.
 
+use std::os::raw::c_void;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -16,10 +17,20 @@ use core_foundation::base::{CFType, TCFType};
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
-use core_foundation_sys::dictionary::CFDictionaryRef;
-use core_foundation_sys::string::CFStringRef;
+use core_foundation_sys::array::{
+    CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef,
+};
+use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFTypeRef};
+use core_foundation_sys::dictionary::{
+    CFDictionaryGetCount, CFDictionaryGetKeysAndValues, CFDictionaryGetTypeID,
+    CFDictionaryGetValueIfPresent, CFDictionaryRef,
+};
+use core_foundation_sys::number::{
+    kCFNumberSInt32Type, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
+};
+use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 
-use crate::{Backend, Error, Flags, Handle, Request, Result};
+use crate::{Backend, Error, Flags, Handle, Request, Result, SystemAssertion};
 
 // Assertion type strings. These are the modern names; `pmset -g assertions` may print
 // the legacy aliases (`NoDisplaySleepAssertion` / `NoIdleSleepAssertion`) instead —
@@ -35,6 +46,8 @@ const KEY_NAME: &str = "AssertName";
 const KEY_TIMEOUT: &str = "TimeoutSeconds";
 const KEY_TIMEOUT_ACTION: &str = "TimeoutAction";
 const TIMEOUT_ACTION_RELEASE: &str = "TimeoutActionRelease";
+// Present in IOPMCopyAssertionsByProcess output, not something we set ourselves.
+const KEY_PROCESS_NAME: &str = "Process Name";
 
 const LEVEL_ON: i32 = 255;
 const IOPM_USER_ACTIVE_LOCAL: i32 = 0;
@@ -70,6 +83,15 @@ extern "C" {
         user_type: i32,
         assertion_id: *mut u32,
     ) -> i32;
+
+    /// Returns `CFDictionary<CFNumber pid, CFArray<CFDictionary>>` under the create
+    /// rule — the caller must `CFRelease` it.
+    fn IOPMCopyAssertionsByProcess(assertions_by_pid: *mut CFDictionaryRef) -> i32;
+}
+
+extern "C" {
+    /// libproc, via libSystem. Writes the executable name for `pid`.
+    fn proc_name(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
 }
 
 #[derive(Debug, Default)]
@@ -200,10 +222,131 @@ impl Backend for IoKitBackend {
         Ok(())
     }
 
-    // TODO(phase-2): implement via `IOPMCopyAssertionsByProcess`, which returns
-    // CFDictionary<CFNumber pid, CFArray<CFDictionary>>. Backs the "why is my Mac
-    // awake?" panel. Left unimplemented rather than faked so
-    // callers get a clear Unsupported instead of a plausible empty list.
+    fn system_assertions(&self) -> Result<Vec<SystemAssertion>> {
+        // SAFETY: `out` is a valid out-pointer; on success we own the returned
+        // dictionary under the create rule and release it before returning.
+        let mut out: CFDictionaryRef = std::ptr::null();
+        let rc = unsafe { IOPMCopyAssertionsByProcess(&mut out) };
+
+        if rc != KERN_SUCCESS {
+            return Err(Error::Os { call: "IOPMCopyAssertionsByProcess", code: rc as i64 });
+        }
+        if out.is_null() {
+            // No assertions held anywhere. Distinct from an error.
+            return Ok(Vec::new());
+        }
+
+        let result = unsafe { parse_assertions_by_process(out) };
+        unsafe { CFRelease(out as CFTypeRef) };
+        Ok(result)
+    }
+}
+
+/// Walk `CFDictionary<CFNumber pid, CFArray<CFDictionary>>` into a flat list.
+///
+/// Every lookup is type-checked and optional: this data comes from other processes
+/// via powerd, so a missing or unexpectedly-typed key must degrade gracefully rather
+/// than panic. An assertion with no readable type is skipped; one with no readable
+/// name still gets listed, because knowing *something* holds a display assertion is
+/// the useful part.
+///
+/// SAFETY: `by_pid` must be a valid `CFDictionaryRef` whose values are `CFArrayRef`s
+/// of `CFDictionaryRef`. Borrows only — the caller owns and releases `by_pid`.
+unsafe fn parse_assertions_by_process(by_pid: CFDictionaryRef) -> Vec<SystemAssertion> {
+    let count = CFDictionaryGetCount(by_pid);
+    if count <= 0 {
+        return Vec::new();
+    }
+
+    let n = count as usize;
+    let mut keys: Vec<*const c_void> = vec![std::ptr::null(); n];
+    let mut values: Vec<*const c_void> = vec![std::ptr::null(); n];
+    CFDictionaryGetKeysAndValues(by_pid, keys.as_mut_ptr(), values.as_mut_ptr());
+
+    let mut found = Vec::new();
+
+    for i in 0..n {
+        let pid = match cf_i32(keys[i]) {
+            Some(p) => p,
+            None => continue,
+        };
+        let array = values[i] as CFArrayRef;
+        if array.is_null() || CFGetTypeID(array as CFTypeRef) != CFArrayGetTypeID() {
+            continue;
+        }
+
+        let len = CFArrayGetCount(array);
+        for j in 0..len {
+            let entry = CFArrayGetValueAtIndex(array, j) as CFDictionaryRef;
+            if entry.is_null() || CFGetTypeID(entry as CFTypeRef) != CFDictionaryGetTypeID() {
+                continue;
+            }
+
+            let Some(kind) = cf_string(entry, KEY_TYPE) else { continue };
+
+            // powerd usually supplies the process name; fall back to asking the
+            // kernel, then to the bare pid, so a row is never blank.
+            let process = cf_string(entry, KEY_PROCESS_NAME)
+                .or_else(|| proc_name_for(pid))
+                .unwrap_or_else(|| format!("pid {pid}"));
+
+            found.push(SystemAssertion {
+                pid,
+                process,
+                kind,
+                name: cf_string(entry, KEY_NAME).unwrap_or_default(),
+            });
+        }
+    }
+
+    found
+}
+
+/// Read a `CFString` value out of a dictionary, or `None` if absent or another type.
+unsafe fn cf_string(dict: CFDictionaryRef, key: &str) -> Option<String> {
+    let cf_key = CFString::new(key);
+    let mut value: *const c_void = std::ptr::null();
+
+    if CFDictionaryGetValueIfPresent(
+        dict,
+        cf_key.as_CFTypeRef() as *const c_void,
+        &mut value,
+    ) == 0
+        || value.is_null()
+        || CFGetTypeID(value as CFTypeRef) != CFStringGetTypeID()
+    {
+        return None;
+    }
+    Some(CFString::wrap_under_get_rule(value as CFStringRef).to_string())
+}
+
+/// Read a `CFNumber` as `i32`, or `None` if it is another type.
+unsafe fn cf_i32(value: *const c_void) -> Option<i32> {
+    if value.is_null() || CFGetTypeID(value as CFTypeRef) != CFNumberGetTypeID() {
+        return None;
+    }
+    let mut out: i32 = 0;
+    let ok = CFNumberGetValue(
+        value as CFNumberRef,
+        kCFNumberSInt32Type,
+        &mut out as *mut i32 as *mut c_void,
+    );
+    if !ok {
+        return None;
+    }
+    Some(out)
+}
+
+/// Ask the kernel for a pid's executable name.
+fn proc_name_for(pid: i32) -> Option<String> {
+    // 2*MAXCOMLEN+1 is what libproc documents for proc_name.
+    let mut buf = [0i8; 64];
+    let written = unsafe { proc_name(pid, buf.as_mut_ptr() as *mut c_void, buf.len() as u32) };
+    if written <= 0 {
+        return None;
+    }
+    let bytes: Vec<u8> = buf[..written as usize].iter().map(|c| *c as u8).collect();
+    String::from_utf8(bytes).ok().filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]
@@ -274,6 +417,57 @@ mod tests {
         backend.release(&handle).expect("first release");
         let err = backend.release(&handle).expect_err("second release should surface");
         assert!(matches!(err, Error::Os { call: "IOPMAssertionRelease", .. }));
+    }
+
+    /// Our own assertion must show up in the system-wide list, with the name we gave
+    /// it — that name is how a user identifies us in `pmset -g assertions`.
+    #[test]
+    fn system_assertions_includes_our_own() {
+        let backend = IoKitBackend::default();
+        let handle = backend
+            .acquire(&Request::new(Flags::display_and_system(), "assertion list test"))
+            .expect("acquire");
+
+        let all = backend.system_assertions().expect("system_assertions");
+        backend.release(&handle).expect("release");
+
+        assert!(!all.is_empty(), "the system always has some assertions held");
+
+        let ours: Vec<_> = all
+            .iter()
+            .filter(|a| a.name.contains("assertion list test"))
+            .collect();
+        assert_eq!(ours.len(), 2, "display + system, got: {ours:#?}");
+
+        let mut kinds: Vec<&str> = ours.iter().map(|a| a.kind.as_str()).collect();
+        kinds.sort_unstable();
+        assert_eq!(kinds, vec![TYPE_DISPLAY, TYPE_SYSTEM]);
+
+        let me = std::process::id() as i32;
+        for a in &ours {
+            assert_eq!(a.pid, me, "should be attributed to this process");
+            assert!(!a.process.is_empty(), "process name must never be blank");
+        }
+    }
+
+    /// Every row must be populated enough to render. A blank process column in the
+    /// "why is my Mac awake?" panel is worse than useless.
+    #[test]
+    fn system_assertions_rows_are_all_renderable() {
+        let all = IoKitBackend::default().system_assertions().expect("list");
+        for a in &all {
+            assert!(!a.kind.is_empty(), "kind must be present: {a:?}");
+            assert!(!a.process.is_empty(), "process must be present: {a:?}");
+            assert!(a.pid > 0, "pid must be plausible: {a:?}");
+        }
+    }
+
+    #[test]
+    fn proc_name_resolves_our_own_pid() {
+        let me = std::process::id() as i32;
+        let name = proc_name_for(me).expect("should resolve this process");
+        assert!(!name.is_empty());
+        assert!(!name.contains('\0'), "must be trimmed, not NUL-padded: {name:?}");
     }
 
     #[test]

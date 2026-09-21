@@ -1,8 +1,8 @@
 //! Session + leak-safety tests, all against `FakeBackend` so they run on any platform.
 //!
-//! The recurring assertion in here is `live_count() == 0`. A leaked power assertion
-//! means the user's machine silently never sleeps again, so every path that can end a
-//! session gets checked for it.
+//! The recurring assertion in here is `live_count() == 0`. The OS reclaims a dead
+//! process's assertions, so the leak that matters is dropping the handle while still
+//! running — every path that can end a session gets checked for it.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -239,8 +239,8 @@ fn dropping_the_manager_releases_the_session() {
 
 #[test]
 fn timed_sessions_hand_the_deadline_to_the_os_too() {
-    // The kernel-side timeout is what protects users if this process is suspended or
-    // SIGKILLed, so a timed session must always set it.
+    // The kernel-side timeout is what protects users if this process is alive but no
+    // longer ticking, so a timed session must always set it.
     let (mut mgr, _backend, _clock) = manager();
     mgr.start(
         Kind::For(Duration::from_secs(300)),

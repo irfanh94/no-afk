@@ -146,8 +146,9 @@ impl Manager {
         let mut req = Request::new(flags, reason.clone());
 
         // Hand the deadline to the OS as well as tracking it ourselves. The kernel-side
-        // timeout is what saves us if this process is suspended or SIGKILLed — our own
-        // `tick()` can't run then.
+        // timeout is what saves us if this process is alive but no longer ticking —
+        // suspended or deadlocked — since `tick()` cannot run then. (Process death
+        // needs no help: the OS releases a dead process's assertions.)
         if let Kind::For(d) = kind {
             req = req.with_timeout(d);
         }

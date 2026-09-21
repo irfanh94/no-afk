@@ -503,8 +503,10 @@ fn main() {
                 .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()))
                 .build(app)?;
 
-            // A tray app has no Dock icon to click, so give the settings window a
-            // launch route: `open -a no-afk --args --settings`.
+            // Cold-start route into the settings window, for development and for
+            // `open -a no-afk --args --settings` on a *fresh* launch. Once an instance
+            // exists macOS drops the args, so the reopen handler in `run` below is
+            // what covers the common case.
             if std::env::args().any(|a| a == "--settings") {
                 open_settings(&handle);
             }
@@ -539,6 +541,14 @@ fn main() {
                     api.prevent_exit();
                 }
             }
+
+            // Launching the app again while it is already running — double-clicking it
+            // in Finder, or picking it from Spotlight. macOS delivers a reopen event
+            // and *discards* any --args, so this is the only route that works once an
+            // instance exists. Without it, re-launching a tray app appears to do
+            // nothing at all.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => open_settings(app),
 
             tauri::RunEvent::Exit => {
                 let state = app.state::<Arc<AppState>>();

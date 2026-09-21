@@ -245,8 +245,9 @@ pub fn default_backend() -> Arc<dyn Backend> {
 /// A live keep-awake session. Releases on drop.
 ///
 /// Held assertions are released when this value goes out of scope, panics unwind past
-/// it, or the process exits normally. It cannot protect against `SIGKILL` — that is
-/// what [`Request::timeout`] is for.
+/// it, or the process exits normally. `SIGKILL` needs no cover here — the OS releases
+/// a dead process's assertions itself. What neither this nor process death covers is a
+/// process still alive but no longer ticking; that is what [`Request::timeout`] is for.
 pub struct Guard {
     backend: Arc<dyn Backend>,
     handle: Handle,

@@ -53,13 +53,19 @@ fn guard_releases_when_unwinding_past_it() {
 #[test]
 fn drop_does_not_panic_when_release_fails() {
     let backend = Arc::new(FakeBackend::new());
-    backend.fail_next_release(Error::Os { call: "test", code: -1 });
+    backend.fail_next_release(Error::Os {
+        call: "test",
+        code: -1,
+    });
 
     // Must not panic: a panic inside Drop during unwind aborts the process.
     drop(acquire(backend.clone(), Request::new(Flags::system_only(), "test")).unwrap());
 
     // The release was attempted and reported, even though it failed.
-    assert!(matches!(backend.events().last(), Some(Event::Release { .. })));
+    assert!(matches!(
+        backend.events().last(),
+        Some(Event::Release { .. })
+    ));
 }
 
 #[test]
@@ -74,10 +80,16 @@ fn empty_request_is_rejected() {
 #[test]
 fn explicit_release_surfaces_errors_that_drop_would_swallow() {
     let backend = Arc::new(FakeBackend::new());
-    backend.fail_next_release(Error::Os { call: "test", code: -7 });
+    backend.fail_next_release(Error::Os {
+        call: "test",
+        code: -7,
+    });
 
     let guard = acquire(backend, Request::new(Flags::system_only(), "test")).unwrap();
-    assert!(guard.release().is_err(), "release() should report what Drop hides");
+    assert!(
+        guard.release().is_err(),
+        "release() should report what Drop hides"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +99,8 @@ fn explicit_release_surfaces_errors_that_drop_would_swallow() {
 #[test]
 fn indefinite_sessions_never_expire() {
     let (mut mgr, backend, clock) = manager();
-    mgr.start(Kind::Indefinite, Flags::display_and_system(), "forever").unwrap();
+    mgr.start(Kind::Indefinite, Flags::display_and_system(), "forever")
+        .unwrap();
 
     clock.advance(Duration::from_secs(60 * 60 * 24 * 7));
 
@@ -100,8 +113,12 @@ fn indefinite_sessions_never_expire() {
 #[test]
 fn timed_session_counts_down_and_auto_ends() {
     let (mut mgr, backend, clock) = manager();
-    mgr.start(Kind::For(Duration::from_secs(600)), Flags::display_and_system(), "30m")
-        .unwrap();
+    mgr.start(
+        Kind::For(Duration::from_secs(600)),
+        Flags::display_and_system(),
+        "30m",
+    )
+    .unwrap();
 
     assert_eq!(mgr.remaining(), Some(Duration::from_secs(600)));
 
@@ -119,17 +136,31 @@ fn timed_session_counts_down_and_auto_ends() {
 #[test]
 fn remaining_saturates_at_zero_rather_than_underflowing() {
     let (mut mgr, _backend, clock) = manager();
-    mgr.start(Kind::For(Duration::from_secs(10)), Flags::system_only(), "short").unwrap();
+    mgr.start(
+        Kind::For(Duration::from_secs(10)),
+        Flags::system_only(),
+        "short",
+    )
+    .unwrap();
 
     clock.advance(Duration::from_secs(9999));
 
-    assert_eq!(mgr.remaining(), Some(Duration::ZERO), "must not wrap around");
+    assert_eq!(
+        mgr.remaining(),
+        Some(Duration::ZERO),
+        "must not wrap around"
+    );
 }
 
 #[test]
 fn tick_is_idempotent_after_expiry() {
     let (mut mgr, backend, clock) = manager();
-    mgr.start(Kind::For(Duration::from_secs(5)), Flags::system_only(), "short").unwrap();
+    mgr.start(
+        Kind::For(Duration::from_secs(5)),
+        Flags::system_only(),
+        "short",
+    )
+    .unwrap();
     clock.advance(Duration::from_secs(5));
 
     assert!(mgr.tick().unwrap(), "first tick reports the end");
@@ -146,24 +177,40 @@ fn tick_is_idempotent_after_expiry() {
 fn starting_a_new_session_replaces_the_old_one_without_leaking() {
     let (mut mgr, backend, _clock) = manager();
 
-    mgr.start(Kind::Indefinite, Flags::display_and_system(), "first").unwrap();
+    mgr.start(Kind::Indefinite, Flags::display_and_system(), "first")
+        .unwrap();
     assert_eq!(backend.live_count(), 2);
 
-    mgr.start(Kind::Indefinite, Flags::system_only(), "second").unwrap();
-    assert_eq!(backend.live_count(), 1, "old session released, new one is system-only");
+    mgr.start(Kind::Indefinite, Flags::system_only(), "second")
+        .unwrap();
+    assert_eq!(
+        backend.live_count(),
+        1,
+        "old session released, new one is system-only"
+    );
     assert_eq!(mgr.session().unwrap().reason, "second");
 }
 
 #[test]
 fn a_failed_start_leaves_us_cleanly_off() {
     let (mut mgr, backend, _clock) = manager();
-    mgr.start(Kind::Indefinite, Flags::display_and_system(), "first").unwrap();
+    mgr.start(Kind::Indefinite, Flags::display_and_system(), "first")
+        .unwrap();
 
-    backend.fail_next_acquire(Error::Os { call: "test", code: -1 });
-    assert!(mgr.start(Kind::Indefinite, Flags::system_only(), "doomed").is_err());
+    backend.fail_next_acquire(Error::Os {
+        call: "test",
+        code: -1,
+    });
+    assert!(mgr
+        .start(Kind::Indefinite, Flags::system_only(), "doomed")
+        .is_err());
 
     assert!(!mgr.is_active(), "must not report an active session");
-    assert_eq!(backend.live_count(), 0, "and must not hold stale assertions");
+    assert_eq!(
+        backend.live_count(),
+        0,
+        "and must not hold stale assertions"
+    );
 }
 
 #[test]
@@ -179,7 +226,8 @@ fn dropping_the_manager_releases_the_session() {
     let backend = Arc::new(FakeBackend::new());
     {
         let mut mgr = Manager::new(backend.clone(), Arc::new(TestClock::default()));
-        mgr.start(Kind::Indefinite, Flags::display_and_system(), "test").unwrap();
+        mgr.start(Kind::Indefinite, Flags::display_and_system(), "test")
+            .unwrap();
         assert_eq!(backend.live_count(), 2);
     }
     assert_eq!(backend.live_count(), 0, "quitting the app must release");
@@ -194,7 +242,12 @@ fn timed_sessions_hand_the_deadline_to_the_os_too() {
     // The kernel-side timeout is what protects users if this process is suspended or
     // SIGKILLed, so a timed session must always set it.
     let (mut mgr, _backend, _clock) = manager();
-    mgr.start(Kind::For(Duration::from_secs(300)), Flags::system_only(), "5m").unwrap();
+    mgr.start(
+        Kind::For(Duration::from_secs(300)),
+        Flags::system_only(),
+        "5m",
+    )
+    .unwrap();
 
     let req = Request::new(Flags::system_only(), "5m").with_timeout(Duration::from_secs(300));
     assert_eq!(req.timeout, Some(Duration::from_secs(300)));
@@ -203,7 +256,12 @@ fn timed_sessions_hand_the_deadline_to_the_os_too() {
 #[test]
 fn reason_is_recorded_for_the_pmset_listing() {
     let (mut mgr, backend, _clock) = manager();
-    mgr.start(Kind::Indefinite, Flags::display_and_system(), "manual toggle").unwrap();
+    mgr.start(
+        Kind::Indefinite,
+        Flags::display_and_system(),
+        "manual toggle",
+    )
+    .unwrap();
 
     match backend.events().first() {
         Some(Event::Acquire { reason, flags, .. }) => {

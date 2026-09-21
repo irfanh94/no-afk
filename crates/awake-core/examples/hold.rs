@@ -13,14 +13,21 @@ use awake_core::session::{Kind, Manager, SystemClock};
 use awake_core::{default_backend, Flags};
 
 fn main() {
-    let secs: u64 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(15);
+    let secs: u64 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15);
 
     let backend = default_backend();
     println!("backend: {}", backend.name());
 
     let mut mgr = Manager::new(backend, Arc::new(SystemClock));
-    mgr.start(Kind::For(Duration::from_secs(secs)), Flags::display_and_system(), "example hold")
-        .expect("failed to acquire");
+    mgr.start(
+        Kind::For(Duration::from_secs(secs)),
+        Flags::display_and_system(),
+        "example hold",
+    )
+    .expect("failed to acquire");
 
     println!("holding for {secs}s — check: pmset -g assertions | grep no-afk");
 

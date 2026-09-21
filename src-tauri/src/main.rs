@@ -18,7 +18,9 @@ use awake_core::{default_backend, Backend, Flags};
 use serde::Serialize;
 use settings::Settings;
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{
+    Menu, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager as _, State, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -180,7 +182,12 @@ fn start_session(
 
 #[tauri::command]
 fn stop_session(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.awake.lock().unwrap().stop().map_err(|e| e.to_string())?;
+    state
+        .awake
+        .lock()
+        .unwrap()
+        .stop()
+        .map_err(|e| e.to_string())?;
     refresh(&app, &state);
     Ok(())
 }
@@ -212,7 +219,9 @@ fn list_assertions(state: State<'_, Arc<AppState>>) -> Result<Vec<AssertionDto>,
             _ if d.kind.contains("Idle") || d.kind.contains("System") => 2,
             _ => 3,
         };
-        rank(a).cmp(&rank(b)).then_with(|| a.process.cmp(&b.process))
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.process.cmp(&b.process))
     });
     Ok(list)
 }
@@ -221,7 +230,10 @@ fn list_assertions(state: State<'_, Arc<AppState>>) -> Result<Vec<AssertionDto>,
 fn presets() -> Vec<PresetDto> {
     PRESETS
         .iter()
-        .map(|(label, secs)| PresetDto { label: (*label).to_string(), secs: *secs })
+        .map(|(label, secs)| PresetDto {
+            label: (*label).to_string(),
+            secs: *secs,
+        })
         .collect()
 }
 
@@ -293,7 +305,9 @@ fn refresh(app: &AppHandle, state: &AppState) {
 
     if let Some(handles) = state.menu.lock().unwrap().as_ref() {
         let _ = handles.status.set_text(status);
-        let _ = handles.toggle.set_text(if active { "Turn Off" } else { "Turn On" });
+        let _ = handles
+            .toggle
+            .set_text(if active { "Turn Off" } else { "Turn On" });
     }
 
     // Only touch the tray icon when it actually changes.
@@ -450,7 +464,10 @@ fn main() {
     });
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_opener::init())
         .manage(state.clone())
         .invoke_handler(tauri::generate_handler![

@@ -24,12 +24,18 @@ impl Default for Settings {
     fn default() -> Self {
         // Keeping the display on is what most people mean by "keep my Mac awake", so
         // it is the default even though it is the more aggressive of the two.
-        Self { keep_display: true, default_duration_secs: None }
+        Self {
+            keep_display: true,
+            default_duration_secs: None,
+        }
     }
 }
 
 fn path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|d| d.join("settings.json"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("settings.json"))
 }
 
 impl Settings {
@@ -39,8 +45,12 @@ impl Settings {
     /// still start, and defaults are always safe. The bad file is left in place
     /// rather than clobbered, so it can be inspected.
     pub fn load(app: &AppHandle) -> Self {
-        let Some(p) = path(app) else { return Self::default() };
-        let Ok(text) = std::fs::read_to_string(&p) else { return Self::default() };
+        let Some(p) = path(app) else {
+            return Self::default();
+        };
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            return Self::default();
+        };
 
         match serde_json::from_str(&text) {
             Ok(s) => s,
@@ -75,7 +85,10 @@ mod tests {
 
     #[test]
     fn round_trips_through_json() {
-        let s = Settings { keep_display: false, default_duration_secs: Some(1800) };
+        let s = Settings {
+            keep_display: false,
+            default_duration_secs: Some(1800),
+        };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(s, back);
     }

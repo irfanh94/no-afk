@@ -35,7 +35,10 @@ pub struct TestClock {
 
 impl Default for TestClock {
     fn default() -> Self {
-        Self { base: Instant::now(), offset: Mutex::new(Duration::ZERO) }
+        Self {
+            base: Instant::now(),
+            offset: Mutex::new(Duration::ZERO),
+        }
     }
 }
 
@@ -113,7 +116,11 @@ impl fmt::Debug for Manager {
 
 impl Manager {
     pub fn new(backend: Arc<dyn Backend>, clock: Arc<dyn Clock>) -> Self {
-        Self { backend, clock, active: None }
+        Self {
+            backend,
+            clock,
+            active: None,
+        }
     }
 
     pub fn is_active(&self) -> bool {
@@ -146,7 +153,12 @@ impl Manager {
         }
 
         let guard = acquire(Arc::clone(&self.backend), req)?;
-        let session = Session { kind, flags, reason, started: self.clock.now() };
+        let session = Session {
+            kind,
+            flags,
+            reason,
+            started: self.clock.now(),
+        };
         self.active = Some((session, guard));
         Ok(())
     }

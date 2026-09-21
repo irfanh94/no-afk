@@ -46,10 +46,14 @@ impl Backend for PowerRequestBackend {
     }
 
     fn acquire(&self, _req: &Request) -> Result<Handle> {
-        Err(Error::Unsupported("keep-awake is not implemented on Windows yet"))
+        Err(Error::Unsupported(
+            "keep-awake is not implemented on Windows yet",
+        ))
     }
 
     fn release(&self, _handle: &Handle) -> Result<()> {
-        Err(Error::Unsupported("keep-awake is not implemented on Windows yet"))
+        Err(Error::Unsupported(
+            "keep-awake is not implemented on Windows yet",
+        ))
     }
 }

@@ -84,14 +84,15 @@ python3 tools/gen_icons.py
 
 ## Design notes
 
-**Leaked assertions are the failure mode that matters.** If an app exits without
-releasing, the user's Mac silently never sleeps again and there's no UI left to fix it.
-So `Guard` releases on `Drop`, `Drop` never panics, a partial acquire rolls back, and
-every test asserts `live_count() == 0`.
+**Leaked assertions, narrowly.** A crash is safe: powerd releases a dead process's
+assertions, verified by holding two with a 24-hour timeout and `SIGKILL`ing the owner —
+they vanished at once. The leak that does matter is dropping the handle while still
+running, so `Guard` releases on `Drop`, `Drop` never panics, a partial acquire rolls
+back, and every test asserts `live_count() == 0`.
 
 **Timed sessions hand the deadline to the kernel** via `kIOPMAssertionTimeoutKey`
-rather than relying on an app-side timer — the OS deadline still fires if the process
-is suspended or killed.
+rather than relying on an app-side timer, so the deadline still fires if the process is
+alive but no longer ticking — suspended or deadlocked.
 
 **No shelling out to `caffeinate`.** It's a subprocess to babysit, it's blocked under
 App Sandbox, and it's a thin wrapper over the same IOKit calls.

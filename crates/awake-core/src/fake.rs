@@ -11,9 +11,17 @@ use crate::{Backend, Error, Flags, Handle, Request, Result, SystemAssertion};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    Acquire { ids: Vec<u64>, flags: Flags, reason: String },
-    Release { ids: Vec<u64> },
-    UserActivity { reason: String },
+    Acquire {
+        ids: Vec<u64>,
+        flags: Flags,
+        reason: String,
+    },
+    Release {
+        ids: Vec<u64>,
+    },
+    UserActivity {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -93,12 +101,17 @@ impl Backend for FakeBackend {
             flags: req.flags,
             reason: req.reason.clone(),
         });
-        Ok(Handle { ids, timed: req.timeout.is_some() })
+        Ok(Handle {
+            ids,
+            timed: req.timeout.is_some(),
+        })
     }
 
     fn release(&self, handle: &Handle) -> Result<()> {
         let mut st = self.lock();
-        st.events.push(Event::Release { ids: handle.ids.clone() });
+        st.events.push(Event::Release {
+            ids: handle.ids.clone(),
+        });
 
         if let Some(err) = st.fail_next_release.take() {
             return Err(err);
@@ -110,7 +123,9 @@ impl Backend for FakeBackend {
     }
 
     fn declare_user_activity(&self, reason: &str) -> Result<()> {
-        self.lock().events.push(Event::UserActivity { reason: reason.to_string() });
+        self.lock().events.push(Event::UserActivity {
+            reason: reason.to_string(),
+        });
         Ok(())
     }
 

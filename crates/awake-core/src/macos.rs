@@ -4,7 +4,7 @@
 //! calls `IOPMAssertionCreateWithProperties` rather than the simpler
 //! `IOPMAssertionCreateWithName`, because only the properties form accepts
 //! `kIOPMAssertionTimeoutKey` — and an OS-enforced deadline is the only timeout that
-//! survives our process being suspended or killed.
+//! survives our process being suspended or wedged.
 //!
 //! We never shell out to `/usr/bin/caffeinate`: it is a subprocess to babysit, it is
 //! blocked under App Sandbox, and it is a thin wrapper over exactly these calls.
@@ -107,9 +107,18 @@ pub struct IoKitBackend {
 
 fn create_assertion(kind: &str, name: &str, timeout: Option<Duration>) -> Result<u32> {
     let mut pairs: Vec<(CFType, CFType)> = vec![
-        (CFString::new(KEY_TYPE).as_CFType(), CFString::new(kind).as_CFType()),
-        (CFString::new(KEY_LEVEL).as_CFType(), CFNumber::from(LEVEL_ON).as_CFType()),
-        (CFString::new(KEY_NAME).as_CFType(), CFString::new(name).as_CFType()),
+        (
+            CFString::new(KEY_TYPE).as_CFType(),
+            CFString::new(kind).as_CFType(),
+        ),
+        (
+            CFString::new(KEY_LEVEL).as_CFType(),
+            CFNumber::from(LEVEL_ON).as_CFType(),
+        ),
+        (
+            CFString::new(KEY_NAME).as_CFType(),
+            CFString::new(name).as_CFType(),
+        ),
     ];
 
     if let Some(t) = timeout {
@@ -130,7 +139,10 @@ fn create_assertion(kind: &str, name: &str, timeout: Option<Duration>) -> Result
     let rc = unsafe { IOPMAssertionCreateWithProperties(dict.as_concrete_TypeRef(), &mut id) };
 
     if rc != KERN_SUCCESS {
-        return Err(Error::Os { call: "IOPMAssertionCreateWithProperties", code: rc as i64 });
+        return Err(Error::Os {
+            call: "IOPMAssertionCreateWithProperties",
+            code: rc as i64,
+        });
     }
     Ok(id)
 }
@@ -175,7 +187,10 @@ impl Backend for IoKitBackend {
             }
         }
 
-        Ok(Handle { ids, timed: req.timeout.is_some() })
+        Ok(Handle {
+            ids,
+            timed: req.timeout.is_some(),
+        })
     }
 
     fn release(&self, handle: &Handle) -> Result<()> {
@@ -193,7 +208,10 @@ impl Backend for IoKitBackend {
                 continue;
             }
             if first_err.is_none() {
-                first_err = Some(Error::Os { call: "IOPMAssertionRelease", code: rc as i64 });
+                first_err = Some(Error::Os {
+                    call: "IOPMAssertionRelease",
+                    code: rc as i64,
+                });
             }
         }
         match first_err {
@@ -204,7 +222,10 @@ impl Backend for IoKitBackend {
 
     fn declare_user_activity(&self, reason: &str) -> Result<()> {
         let name = CFString::new(&format!("no-afk: {reason}"));
-        let mut guard = self.user_activity_id.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self
+            .user_activity_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut id: u32 = *guard;
 
         let rc = unsafe {
@@ -216,7 +237,10 @@ impl Backend for IoKitBackend {
         };
 
         if rc != KERN_SUCCESS {
-            return Err(Error::Os { call: "IOPMAssertionDeclareUserActivity", code: rc as i64 });
+            return Err(Error::Os {
+                call: "IOPMAssertionDeclareUserActivity",
+                code: rc as i64,
+            });
         }
         *guard = id;
         Ok(())
@@ -229,7 +253,10 @@ impl Backend for IoKitBackend {
         let rc = unsafe { IOPMCopyAssertionsByProcess(&mut out) };
 
         if rc != KERN_SUCCESS {
-            return Err(Error::Os { call: "IOPMCopyAssertionsByProcess", code: rc as i64 });
+            return Err(Error::Os {
+                call: "IOPMCopyAssertionsByProcess",
+                code: rc as i64,
+            });
         }
         if out.is_null() {
             // No assertions held anywhere. Distinct from an error.
@@ -282,7 +309,9 @@ unsafe fn parse_assertions_by_process(by_pid: CFDictionaryRef) -> Vec<SystemAsse
                 continue;
             }
 
-            let Some(kind) = cf_string(entry, KEY_TYPE) else { continue };
+            let Some(kind) = cf_string(entry, KEY_TYPE) else {
+                continue;
+            };
 
             // powerd usually supplies the process name; fall back to asking the
             // kernel, then to the bare pid, so a row is never blank.
@@ -307,11 +336,7 @@ unsafe fn cf_string(dict: CFDictionaryRef, key: &str) -> Option<String> {
     let cf_key = CFString::new(key);
     let mut value: *const c_void = std::ptr::null();
 
-    if CFDictionaryGetValueIfPresent(
-        dict,
-        cf_key.as_CFTypeRef() as *const c_void,
-        &mut value,
-    ) == 0
+    if CFDictionaryGetValueIfPresent(dict, cf_key.as_CFTypeRef() as *const c_void, &mut value) == 0
         || value.is_null()
         || CFGetTypeID(value as CFTypeRef) != CFStringGetTypeID()
     {
@@ -370,8 +395,15 @@ mod tests {
         let req = Request::new(Flags::display_and_system(), "unit test");
 
         let guard = acquire(backend, req).expect("acquire should succeed on macOS");
-        assert_eq!(guard.handle().ids.len(), 2, "display + system = two assertions");
-        assert!(guard.handle().ids.iter().all(|id| *id != 0), "ids should be non-zero");
+        assert_eq!(
+            guard.handle().ids.len(),
+            2,
+            "display + system = two assertions"
+        );
+        assert!(
+            guard.handle().ids.iter().all(|id| *id != 0),
+            "ids should be non-zero"
+        );
 
         guard.release().expect("release should succeed");
     }
@@ -379,8 +411,8 @@ mod tests {
     #[test]
     fn timeout_assertion_is_accepted_by_the_kernel() {
         let backend = IoKitBackend::default();
-        let req = Request::new(Flags::system_only(), "timeout test")
-            .with_timeout(Duration::from_secs(1));
+        let req =
+            Request::new(Flags::system_only(), "timeout test").with_timeout(Duration::from_secs(1));
 
         let handle = backend.acquire(&req).expect("timed acquire should succeed");
         backend.release(&handle).expect("release should succeed");
@@ -392,8 +424,7 @@ mod tests {
     #[test]
     fn releasing_a_timed_assertion_twice_is_ok() {
         let backend = IoKitBackend::default();
-        let req = Request::new(Flags::system_only(), "timed")
-            .with_timeout(Duration::from_secs(60));
+        let req = Request::new(Flags::system_only(), "timed").with_timeout(Duration::from_secs(60));
 
         let handle = backend.acquire(&req).expect("acquire");
         assert!(handle.timed);
@@ -415,8 +446,16 @@ mod tests {
         assert!(!handle.timed);
 
         backend.release(&handle).expect("first release");
-        let err = backend.release(&handle).expect_err("second release should surface");
-        assert!(matches!(err, Error::Os { call: "IOPMAssertionRelease", .. }));
+        let err = backend
+            .release(&handle)
+            .expect_err("second release should surface");
+        assert!(matches!(
+            err,
+            Error::Os {
+                call: "IOPMAssertionRelease",
+                ..
+            }
+        ));
     }
 
     /// Our own assertion must show up in the system-wide list, with the name we gave
@@ -425,13 +464,19 @@ mod tests {
     fn system_assertions_includes_our_own() {
         let backend = IoKitBackend::default();
         let handle = backend
-            .acquire(&Request::new(Flags::display_and_system(), "assertion list test"))
+            .acquire(&Request::new(
+                Flags::display_and_system(),
+                "assertion list test",
+            ))
             .expect("acquire");
 
         let all = backend.system_assertions().expect("system_assertions");
         backend.release(&handle).expect("release");
 
-        assert!(!all.is_empty(), "the system always has some assertions held");
+        assert!(
+            !all.is_empty(),
+            "the system always has some assertions held"
+        );
 
         let ours: Vec<_> = all
             .iter()
@@ -467,7 +512,10 @@ mod tests {
         let me = std::process::id() as i32;
         let name = proc_name_for(me).expect("should resolve this process");
         assert!(!name.is_empty());
-        assert!(!name.contains('\0'), "must be trimmed, not NUL-padded: {name:?}");
+        assert!(
+            !name.contains('\0'),
+            "must be trimmed, not NUL-padded: {name:?}"
+        );
     }
 
     #[test]

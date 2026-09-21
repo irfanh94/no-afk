@@ -15,7 +15,10 @@ fn main() {
         Ok(list) => {
             println!("{} assertions held system-wide\n", list.len());
             for a in &list {
-                println!("  pid {:<7} {:<26} {:<30} {}", a.pid, a.process, a.kind, a.name);
+                println!(
+                    "  pid {:<7} {:<26} {:<30} {}",
+                    a.pid, a.process, a.kind, a.name
+                );
             }
         }
         Err(err) => eprintln!("could not read assertions: {err}"),

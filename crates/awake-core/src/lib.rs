@@ -21,14 +21,23 @@
 //!
 //! # Leak safety
 //!
-//! A leaked assertion means the user's machine silently never sleeps again, and it
-//! outlives the app process on some platforms. That is the single worst failure mode in
-//! this product category, so:
+//! Measured on macOS 26: powerd releases a process's assertions when that process
+//! dies. Two assertions held with a 24-hour timeout vanished immediately on
+//! `SIGKILL`, so a crash cannot strand the machine awake — the OS cleans up. The
+//! same holds on the other platforms by construction: a Windows power request is a
+//! kernel object closed with the process, and a logind inhibitor is a file
+//! descriptor closed with it.
 //!
-//! - [`Guard`] releases on [`Drop`], unconditionally.
+//! So the leak that actually matters is narrower than "the app died": it is losing
+//! the [`Handle`] while still *running*, or staying alive but wedged. Hence:
+//!
+//! - [`Guard`] releases on [`Drop`], unconditionally — this is the one that counts,
+//!   because a dropped-but-unreleased handle is unrecoverable while the process
+//!   lives on holding it.
 //! - [`Drop`] never panics; a failed release is logged, not propagated.
-//! - Prefer [`Request::timeout`] over an app-side timer. It is enforced by the OS, so it
-//!   still fires if our process is suspended, wedged, or `SIGSTOP`ped.
+//! - Prefer [`Request::timeout`] over an app-side timer. The kernel owns the
+//!   deadline, so it still fires if our process is `SIGSTOP`ped, deadlocked, or
+//!   otherwise alive but no longer ticking — the cases process death does not cover.
 
 use std::fmt;
 use std::sync::Arc;
@@ -97,12 +106,20 @@ impl Flags {
     /// The default user-facing "keep my Mac awake" behaviour: screen stays on,
     /// machine stays up. This is what CoffeeTea/Caffeine do.
     pub const fn display_and_system() -> Self {
-        Self { display: true, system: true, disk: false }
+        Self {
+            display: true,
+            system: true,
+            disk: false,
+        }
     }
 
     /// Stay awake but let the screen go dark — long downloads, builds, renders.
     pub const fn system_only() -> Self {
-        Self { display: false, system: true, disk: false }
+        Self {
+            display: false,
+            system: true,
+            disk: false,
+        }
     }
 
     pub const fn is_empty(self) -> bool {
@@ -124,13 +141,19 @@ pub struct Request {
     /// OS-enforced auto-release.
     ///
     /// Strongly preferred over an app-side timer: the kernel owns the deadline, so it
-    /// fires even if our process is suspended or killed uncleanly.
+    /// still fires if our process is alive but no longer ticking — suspended,
+    /// deadlocked, or `SIGSTOP`ped. (Process *death* needs no help; the OS releases
+    /// a dead process's assertions itself.)
     pub timeout: Option<Duration>,
 }
 
 impl Request {
     pub fn new(flags: Flags, reason: impl Into<String>) -> Self {
-        Self { flags, reason: reason.into(), timeout: None }
+        Self {
+            flags,
+            reason: reason.into(),
+            timeout: None,
+        }
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -282,5 +305,10 @@ pub fn acquire(backend: Arc<dyn Backend>, req: Request) -> Result<Guard> {
         return Err(Error::EmptyRequest);
     }
     let handle = backend.acquire(&req)?;
-    Ok(Guard { backend, handle, flags: req.flags, released: false })
+    Ok(Guard {
+        backend,
+        handle,
+        flags: req.flags,
+        released: false,
+    })
 }

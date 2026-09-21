@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # macOS runner is required, not just preferred: awake-core's macOS backend calls
+    # IOKit for real in its tests rather than only exercising the fake backend.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --component rustfmt,clippy --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Icons are reproducible from source
+        # tools/gen_icons.py is the source of truth for every committed icon; this
+        # fails if someone hand-edits a PNG or forgets to regenerate after a change.
+        run: |
+          python3 tools/gen_icons.py
+          git diff --exit-code -- src-tauri/icons
+
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      # Unsigned: signing and notarisation need secrets, so they belong in a release
+      # workflow rather than on every push. This only proves the bundle still builds.
+      - name: Build app bundle
+        run: npm run build

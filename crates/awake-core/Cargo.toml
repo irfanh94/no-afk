@@ -1,0 +1,15 @@
+[package]
+name = "awake-core"
+description = "Cross-platform OS keep-awake primitives (L1/L2). No UI, no Tauri."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
+[dev-dependencies]

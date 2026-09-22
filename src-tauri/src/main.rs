@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use awake_core::presence::{self, Keeper};
 use awake_core::session::{Kind, Manager as AwakeManager, SystemClock};
 use awake_core::{default_backend, Backend, Flags};
 use serde::Serialize;
@@ -116,6 +117,18 @@ struct AssertionDto {
 struct PresetDto {
     label: String,
     secs: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct PresenceDto {
+    /// The user's preference.
+    enabled: bool,
+    /// Whether Accessibility has actually been granted. `enabled` without this does
+    /// nothing, and the UI has to say so rather than look like it is working.
+    trusted: bool,
+    /// Idle time as Slack and Teams see it, so the panel can show it live.
+    idle_secs: u64,
+    threshold_secs: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +255,37 @@ fn presets() -> Vec<PresetDto> {
             secs: *secs,
         })
         .collect()
+}
+
+#[tauri::command]
+fn presence_status(state: State<'_, Arc<AppState>>) -> PresenceDto {
+    PresenceDto {
+        enabled: state.settings.lock().unwrap().keep_presence,
+        trusted: presence::is_trusted(),
+        idle_secs: presence::idle().as_secs(),
+        threshold_secs: presence::DEFAULT_IDLE_THRESHOLD.as_secs(),
+    }
+}
+
+/// Trigger the OS Accessibility prompt.
+///
+/// The grant cannot be confirmed here — the user has to act in System Settings, and
+/// the result only shows up in a later `presence_status` call.
+#[tauri::command]
+fn request_presence_trust() {
+    presence::request_trust();
+}
+
+/// Deep-link straight to the Accessibility list, since the prompt is easy to dismiss
+/// and there is no obvious way back to it.
+#[tauri::command]
+fn open_accessibility_settings(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -400,7 +444,7 @@ fn open_settings(app: &AppHandle) {
     )
     .title("no-afk")
     // Tall enough that every section fits without scrolling on a default display.
-    .inner_size(540.0, 850.0)
+    .inner_size(540.0, 930.0)
     .min_inner_size(480.0, 520.0)
     .resizable(true)
     .build();
@@ -546,6 +590,9 @@ fn main() {
             check_for_update,
             pending_update,
             install_update,
+            presence_status,
+            request_presence_trust,
+            open_accessibility_settings,
         ])
         .setup(move |app| {
             // Menu-bar-only: no Dock icon. Matches LSUIElement in Info.plist, but also
@@ -594,13 +641,29 @@ fn main() {
             // Drive countdown + auto-expiry.
             let tick_handle = handle.clone();
             let tick_state = state.clone();
+            let keeper = Keeper::default();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(1));
 
-                let ended = {
+                let (ended, active) = {
                     let mut awake = tick_state.awake.lock().unwrap();
-                    awake.tick().unwrap_or(false)
+                    (awake.tick().unwrap_or(false), awake.is_active())
                 };
+
+                // Presence keeping is deliberately tied to an active session: turning
+                // no-afk off must stop everything, with no injection happening while
+                // the app looks idle.
+                //
+                // Ticking every second is fine despite the name — the keeper only
+                // fires once idle passes its threshold, and posting a key resets idle
+                // to zero, so this self-limits to roughly one keystroke per threshold.
+                if active && tick_state.settings.lock().unwrap().keep_presence {
+                    match keeper.tick() {
+                        Ok(true) => println!("no-afk: nudged idle timer"),
+                        Ok(false) => {}
+                        Err(err) => eprintln!("no-afk: presence nudge failed: {err}"),
+                    }
+                }
 
                 refresh(&tick_handle, &tick_state);
 

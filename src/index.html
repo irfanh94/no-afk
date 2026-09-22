@@ -49,6 +49,27 @@
       </section>
 
       <section>
+        <h2>Presence</h2>
+
+        <div class="row">
+          <label for="keep-presence">
+            Keep me active in Slack and Teams
+            <small>
+              Presses an unused key (F15) every couple of minutes while you’re away, so
+              chat apps don’t flip you to “Away”. Nothing else here can do this —
+              keeping the Mac awake doesn’t affect it.
+            </small>
+          </label>
+          <input type="checkbox" id="keep-presence" class="switch" />
+        </div>
+
+        <p class="hint" id="presence-hint"></p>
+        <button id="grant-presence" class="secondary hidden" type="button">
+          Open Accessibility settings
+        </button>
+      </section>
+
+      <section>
         <div class="section-head">
           <h2>Why is my Mac awake?</h2>
           <button id="refresh" class="link" type="button">Refresh</button>

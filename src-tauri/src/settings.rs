@@ -18,6 +18,13 @@ pub struct Settings {
 
     /// What the tray "Turn On" item starts. `None` means indefinite.
     pub default_duration_secs: Option<u64>,
+
+    /// Post synthetic input while idle so Slack and Teams don't mark you away.
+    ///
+    /// Off by default, and deliberately so: unlike everything else here it needs an
+    /// Accessibility grant and works by injecting keystrokes. Opting in should be a
+    /// decision, not something that happens because the app was installed.
+    pub keep_presence: bool,
 }
 
 impl Default for Settings {
@@ -27,6 +34,7 @@ impl Default for Settings {
         Self {
             keep_display: true,
             default_duration_secs: None,
+            keep_presence: false,
         }
     }
 }
@@ -83,11 +91,21 @@ mod tests {
         assert_eq!(s.default_duration_secs, None);
     }
 
+    /// Presence injection must never arrive switched on.
+    #[test]
+    fn presence_is_off_by_default() {
+        assert!(!Settings::default().keep_presence);
+        // And a settings file predating the field must not silently enable it.
+        let old: Settings = serde_json::from_str(r#"{"keep_display":true}"#).unwrap();
+        assert!(!old.keep_presence);
+    }
+
     #[test]
     fn round_trips_through_json() {
         let s = Settings {
             keep_display: false,
             default_duration_secs: Some(1800),
+            keep_presence: true,
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(s, back);

@@ -82,6 +82,7 @@ async function saveSettings() {
       new: {
         keep_display: el("keep-display").checked,
         default_duration_secs: raw === "inf" ? null : Number(raw),
+        keep_presence: el("keep-presence").checked,
       },
     });
   } catch (err) {
@@ -150,6 +151,61 @@ async function checkForUpdate() {
 }
 
 el("update").addEventListener("click", checkForUpdate);
+
+// --- presence (L3) --------------------------------------------------------
+
+/** Plain-language state, including the case where the toggle is on but inert. */
+async function refreshPresence() {
+  let p;
+  try {
+    p = await invoke("presence_status");
+  } catch (err) {
+    el("presence-hint").textContent = String(err);
+    return;
+  }
+
+  el("keep-presence").checked = p.enabled;
+
+  const grantBtn = el("grant-presence");
+  const hint = el("presence-hint");
+
+  if (!p.enabled) {
+    hint.textContent = p.trusted
+      ? "Off. Chat apps will mark you away when you're idle."
+      : "Off. Turning this on will ask for Accessibility permission.";
+    grantBtn.classList.add("hidden");
+    return;
+  }
+
+  if (!p.trusted) {
+    // The dangerous state: the user thinks it's on, but nothing is happening.
+    hint.textContent =
+      "Waiting for Accessibility permission — until it's granted, this does nothing.";
+    hint.classList.add("warn");
+    grantBtn.classList.remove("hidden");
+    return;
+  }
+
+  hint.classList.remove("warn");
+  grantBtn.classList.add("hidden");
+  hint.textContent = `Active. Idle ${p.idle_secs}s; a key is sent once idle passes ${p.threshold_secs}s.`;
+}
+
+el("keep-presence").addEventListener("change", async (e) => {
+  const wanted = e.target.checked;
+  await saveSettings();
+  // Only prompt when switching on, and only if not already granted — re-prompting
+  // an already-trusted app just opens a pointless dialog.
+  if (wanted) {
+    const p = await invoke("presence_status");
+    if (!p.trusted) await invoke("request_presence_trust");
+  }
+  await refreshPresence();
+});
+
+el("grant-presence").addEventListener("click", () =>
+  invoke("open_accessibility_settings"),
+);
 
 // --- assertions -----------------------------------------------------------
 
@@ -243,9 +299,13 @@ async function init() {
   const already = await invoke("pending_update");
   if (already) offerUpdate(already);
 
+  el("keep-presence").checked = settings.keep_presence;
+  await refreshPresence();
+
   await Promise.all([refreshStatus(), refreshAssertions()]);
   setInterval(refreshStatus, STATUS_MS);
   setInterval(refreshAssertions, ASSERTIONS_MS);
+  setInterval(refreshPresence, STATUS_MS);
 }
 
 init().catch((err) => {

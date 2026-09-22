@@ -252,7 +252,7 @@ select {
 .assertions {
   border: 1px solid var(--border);
   border-radius: 8px;
-  max-height: 220px;
+  max-height: 170px;
   overflow-y: auto;
   /* The list is rebuilt every few seconds. Scroll anchoring reacts to that by
      shifting scrollTop to "keep" content stable, which drifts the view down and
@@ -315,4 +315,14 @@ select {
 
 .error {
   color: #ff453a;
+}
+
+/* Shown when presence keeping is enabled but Accessibility has not been granted —
+   the state where the switch looks on but nothing is actually happening. */
+.hint.warn {
+  color: #ff9f0a;
+}
+
+.hidden {
+  display: none;
 }

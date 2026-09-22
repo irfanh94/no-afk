@@ -9,10 +9,11 @@
 //!
 //! - **L1** system sleep — [`Flags::system`]
 //! - **L2** display sleep / screensaver / lock — [`Flags::display`]
-//! - **L3** user-idle / presence (Slack "Away") — **not in this crate.** L3 cannot be
-//!   done with power assertions at all. Slack and Teams read the HID idle counter
-//!   directly, and no power assertion resets it (measured, not assumed), so L3 needs
-//!   synthetic input injection and an Accessibility grant.
+//! - **L3** user-idle / presence (Slack "Away") — [`presence`]. Not achievable with
+//!   power assertions at all: Slack and Teams read the HID idle counter directly, and
+//!   no assertion resets it (measured, not assumed). It needs synthetic input
+//!   injection and an Accessibility grant, so it lives in its own module with its own
+//!   guard rails and is off unless the user opts in.
 //!
 //! On macOS, holding [`Flags::display`] suppresses the screensaver — and therefore the
 //! lock screen — *including* an MDM-managed screensaver timeout. A managed profile only
@@ -44,6 +45,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub mod fake;
+pub mod presence;
 pub mod session;
 
 #[cfg(target_os = "macos")]

@@ -154,13 +154,43 @@ def eye_closed(x, y, s, k=1.0):
 
 
 def app_icon(x, y, s):
-    """Rounded-square badge with the open eye knocked out, for the bundle icon."""
+    """Rounded-square (squircle-ish) badge coverage for the bundle icon."""
     cx, cy = s / 2, s / 2
     u, v = (x - cx) / s, (y - cy) / s
     r = 0.20
     ax, ay = abs(u) - (0.42 - r), abs(v) - (0.42 - r)
     d = math.hypot(max(ax, 0), max(ay, 0)) + min(max(ax, ay), 0) - r
     return max(0.0, min(1.0, -d * s * 0.5 + 0.5))
+
+
+# Badge gradient, top to bottom. Amber reads as "awake" and, unlike the original
+# near-black, stays legible on the DMG's light background.
+BADGE_TOP = (255, 179, 64)
+BADGE_BOTTOM = (240, 138, 23)
+GLYPH = (255, 255, 255)
+
+
+def compose_app_icon(px):
+    """Coloured badge with the eye drawn *on* it in white.
+
+    The glyph is painted rather than knocked out. Knocking it out makes the eye show
+    whatever sits behind the icon, so it looked white on a light background and dark
+    on a dark one — inconsistent, and muddy on the DMG.
+    """
+    badge = render(px, app_icon)
+    eye = render(px, lambda x, y, s: eye_open(x, y, s, k=0.62))
+
+    rows = []
+    for j, (brow, erow) in enumerate(zip(badge, eye)):
+        t = j / max(px - 1, 1)
+        base = [round(BADGE_TOP[i] + (BADGE_BOTTOM[i] - BADGE_TOP[i]) * t) for i in range(3)]
+        row = []
+        for b, e in zip(brow, erow):
+            # Blend the glyph over the gradient, then let the badge shape set alpha.
+            colour = [round(base[i] + (GLYPH[i] - base[i]) * e) for i in range(3)]
+            row.append((colour[0], colour[1], colour[2], int(round(b * 255))))
+        rows.append(row)
+    return rows
 
 
 def main():
@@ -170,19 +200,10 @@ def main():
             write_png(ICONS / f"{name}{suffix}.png", px, px, to_rgba(render(px, shader)))
         print(f"  {name}.png / {name}@2x.png")
 
-    # App icon: dark badge, light eye punched through. The eye is scaled down so it
-    # sits inside the badge instead of overflowing it.
+    # App icon: coloured badge with a white eye. The eye is scaled down so it sits
+    # inside the badge instead of overflowing it.
     for px in (32, 64, 128, 256, 512, 1024):
-        badge = render(px, app_icon)
-        eye = render(px, lambda x, y, s: eye_open(x, y, s, k=0.62))
-        rows = []
-        for by, ey in zip(badge, eye):
-            row = []
-            for b, e in zip(by, ey):
-                a = b * (1 - e)
-                row.append((26, 27, 32, int(round(a * 255))))
-            rows.append(row)
-        write_png(ICONS / f"{px}x{px}.png", px, px, rows)
+        write_png(ICONS / f"{px}x{px}.png", px, px, compose_app_icon(px))
     print("  app icons 32..1024")
 
     # Tauri expects these exact filenames.
